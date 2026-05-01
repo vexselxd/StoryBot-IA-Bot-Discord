@@ -1,12 +1,14 @@
 # StoryBot · AI Writing Assistant for Discord
 
-> A Discord bot that completes phrases using a neural network trained from scratch on philosophical Spanish text.
+> An experiment in minimalist AI design: ~1,500 training phrases, a small neural network, and seven hand-written filters. The question was whether a specific writing style — philosophical Spanish prose — could be captured without massive datasets, expensive GPUs, or retraining cycles.
 
 ---
 
-## What it does
+## The thesis
 
-Send `$ideas` followed by any phrase and the bot completes it — generating text that follows the tone, vocabulary, and rhythm of philosophical writing.
+Most ML projects scale by adding more: more data, more parameters, more compute. This one goes the other direction. The model is intentionally small. The dataset is intentionally limited. The intelligence lives **around** the model, not inside it — in a pipeline of post-processing filters that catch and reshape the output until it reads like the source material.
+
+Send `$ideas` followed by any phrase and the bot completes it:
 
 ```
 User:    $ideas El alma paga sola sus pecados
@@ -16,8 +18,6 @@ User:    $ideas La existencia se basa en una sola cosa
 Bot:  ▶  La existencia se basa en una sola cosa con cicatrices más en mí
          pero eso me reconozco sentir olvidado no confundas eso con libertad.
 ```
-
-The grammar isn't always perfect — but the tone is consistent. That's what ~1,500 training sentences gets you.
 
 ---
 
@@ -32,41 +32,53 @@ The grammar isn't always perfect — but the tone is consistent. That's what ~1,
 
 ---
 
+## Why philosophical Spanish
+
+The choice wasn't accidental. Philosophical prose has dense vocabulary, recurring imagery, and a recognizable rhythm — exactly the kind of texture a small model can learn to imitate when general fluency is out of reach. Words like *alma*, *silencio*, *fuego*, *muerte* carry weight on their own, so even imperfect grammar reads as deliberate when the tone holds.
+
+This decision shaped everything else: the dataset size, the filter design, even which words the bot prefers to end sentences on.
+
+---
+
 ## How it was built
 
-### 1. Dataset
-~1,500 short philosophical phrases in Spanish. Small by design — the goal was to test whether a minimal dataset could capture a specific writing style, not to build a general-purpose language model.
+### 1. Dataset by design, not by limitation
 
-### 2. Model
-Trained using **n-grams** with TensorFlow/Keras. The model learns which words tend to follow which sequences, then generates completions token by token.
+~1,500 short philosophical phrases in Spanish. The small size was a deliberate constraint — the goal was to test whether a tight, curated corpus could capture a writing style more cleanly than a massive general-purpose one. Less noise, more voice.
 
-- Architecture: n-gram based neural network
-- Framework: TensorFlow / Keras
+### 2. A small model that knows its lane
+
+An n-gram-based neural network trained with TensorFlow/Keras. It learns which words tend to follow which sequences, then samples completions token by token using temperature-controlled softmax.
+
 - Training environment: Google Colab (free GPU)
 - Exported as: `red_neuronal.h5`
+- Tokenizer serialized to: `tokenizer.json`
 
-### 3. The dependency conflict problem
-After training in Colab and exporting to local environment, the bot broke — two libraries required conflicting versions of the same dependency. Neither worked with the other installed.
+The model alone is not enough to produce clean output. That's the point.
 
-**The fix:** serialize the tokenizer to JSON (`tokenizer.json`) instead of relying on the library to reconstruct it at runtime. This removed the problematic dependency from the inference pipeline entirely — the model loads the vocabulary directly from the file and runs cleanly regardless of what versions are installed.
+### 3. Seven filters that do the heavy lifting
 
-This is what made deployment actually work.
+Instead of retraining when the model produced bad sentences, every error pattern observed in real usage was answered with a hand-written filter. The pipeline is the product:
 
-### 4. Output filters
-The raw model output had consistent error patterns. Instead of retraining (expensive in RAM and time), 7 post-processing filters were built by hand — each one targeting a specific type of bad output observed in real usage.
+| # | Filter | What it catches |
+|---|--------|-----------------|
+| 1 | **Length validation** | Discards outputs under 5 words or over 30 — too short to mean anything, too long to stay coherent |
+| 2 | **Article concordance** | Catches grammatical mismatches like *la dios*, *el sombra*, *un guerra* |
+| 3 | **Pronoun & syntax errors** | Filters known broken patterns like *mí me*, *los luz*, *te mí* |
+| 4 | **Consecutive repetition** | Rejects sentences where the same word appears twice in a row |
+| 5 | **Verb requirement** | Demands at least one verb from a curated list — no verb, no sentence |
+| 6 | **Strong-word cutoff** | Cuts the sentence at the last semantically heavy word (*muerte*, *fuego*, *silencio*…) so it ends on impact |
+| 7 | **Cleanup pass** | Capitalizes the first letter and ensures the sentence closes with punctuation |
 
-```
-Observe error → write filter → test → repeat
-```
+The loop was simple: **observe error → write filter → test → repeat.** No retraining, no extra data, no GPU time.
 
-This kept RAM usage low and avoided the need for a larger dataset.
+### 4. The deployment problem (and what it taught me)
 
-### 5. Deployment
-- Model trained in Google Colab
-- Exported to local environment
-- Integrated with Discord via `discord.py`
-- Tokenizer serialized to JSON to resolve version conflicts
-- Run inside a virtual environment (`.venv`)
+After training in Colab and moving the model to the local environment, the bot broke. Two libraries required conflicting versions of the same dependency, and version pinning couldn't resolve it.
+
+The fix wasn't to fight the dependency tree. It was to **remove the dependency from the inference path entirely** — by serializing the tokenizer to JSON and loading the vocabulary directly. The library that was causing the conflict was no longer needed at runtime.
+
+That shift, from "make the conflict work" to "make the conflict irrelevant," is the lesson I keep coming back to.
 
 ---
 
@@ -75,7 +87,7 @@ This kept RAM usage low and avoided the need for a larger dataset.
 ```
 StoryBot-IA-Bot-Discord/
 ├── main.py              # Discord bot + inference logic
-├── model.py             # Model architecture
+├── model.py             # Generation pipeline + filters
 ├── red_neuronal.h5      # Trained model weights
 ├── tokenizer.json       # Serialized tokenizer vocabulary
 ├── max_sequence_len.pkl # Max sequence length for padding
@@ -86,10 +98,15 @@ StoryBot-IA-Bot-Discord/
 
 ## What I learned
 
-- Training and exporting ML models for production is a different problem than training them in a notebook
-- Dependency conflicts in ML environments are not always solvable by pinning versions — sometimes the cleaner solution is to remove the dependency from the critical path entirely
-- Post-processing filters are a practical alternative to retraining when the dataset is small and errors are predictable
-- Serializing model artifacts (tokenizer, sequence length) is essential for reproducible inference across environments
+- **The cleanest fix to a dependency conflict is often to remove the dependency, not pin it.**
+- **Filters can replace retraining** when errors are predictable and the dataset is small. Cheaper, faster, and the failure modes stay legible.
+- **Style is easier to capture than meaning.** A tight thematic dataset gives a small model a voice it could never achieve trying to be general.
+
+---
+
+## Limitations
+
+The grammar isn't always perfect, and the bot is bounded by the vocabulary of its training set — it won't surprise you with words it never saw. The filters can reject too aggressively when temperature is high. These are tradeoffs of the design, not bugs to fix.
 
 ---
 
